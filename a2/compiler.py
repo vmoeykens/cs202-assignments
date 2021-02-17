@@ -22,9 +22,24 @@ def gensym(x):
 ##################################################
 
 def uniquify(e: RVarExp) -> RVarExp:
-    # YOUR CODE HERE
-    pass
-
+    def uniquify_exp(e: RVarExp, env: Dict[str, str]) -> RVarExp:
+        if isinstance(e, Int):
+            return e
+        elif isinstance(e, Var):
+            return Var(env[e.var])
+        elif isinstance(e, Let):
+            let_var = e.x
+            let_rhs = uniquify_exp(e.e1, env)
+            unique_let_var = gensym(let_var)
+            env = {**env, let_var : unique_let_var}
+            let_body = uniquify_exp(e.body, env)
+            return Let(unique_let_var, let_rhs, let_body)
+        elif isinstance(e, Prim):
+            new_args = [uniquify_exp(a, env) for a in e.args]
+            return Prim(e.op, new_args)
+        else:
+            raise Exception('unknown expression', e)
+    return uniquify_exp(e, {})
 
 ##################################################
 # Pass #2: remove-complex-opera*
@@ -38,8 +53,34 @@ def mk_let(bindings: Dict[str, RVarExp], body: RVarExp):
     return result
 
 def rco(e: RVarExp) -> RVarExp:
-    # YOUR CODE HERE
-    pass
+    def rco_exp(e: RVarExp) -> RVarExp:
+        if isinstance(e, Int):
+            return e
+        elif isinstance(e, Var):
+            return e
+        elif isinstance(e, Let):
+            e1_p = rco_exp(e.e1)
+            body_p = rco_exp(e.body)
+            return Let(e.x, e1_p, body_p)
+        elif isinstance(e, Prim):
+            # needs atomic arguments
+            pass
+        else:
+            raise Exception('unknown expression', e)
+
+    def rco_atm(e: RVarExp, bindings: Dict[str, RVarExp]) -> RVarExp:
+        if isinstance(e, Int):
+            return e
+        elif isinstance(e, Var):
+            return e
+        elif isinstance(e, Let):
+            # tricky case
+            pass
+        elif isinstance(e, Prim):
+            # tricky case
+            pass
+        else:
+            raise Exception('unknown expression', e)
 
 
 ##################################################
@@ -47,8 +88,17 @@ def rco(e: RVarExp) -> RVarExp:
 ##################################################
 
 def explicate_control(e: RVarExp) -> cvar.Program:
-    # YOUR CODE HERE
-    pass
+    def ec_tail(e: RVarExp):
+        pass
+
+    def ec_assign(x: str, e: RVarExp, k: cvar.Tail) -> cvar.Tail:
+        if isinstance(e, Int):
+            assignment = cvar.Assign(x, cvar.AtmExp(cvar.Int(e.val)))
+            return cvar.Seq(assignment, k)
+
+        # For atomic expressions the cases will be the same
+        # for 'let' things are more complicated
+        # for 'plus' things are only slightly more complicated
 
 ##################################################
 # Pass #4: select-instructions
