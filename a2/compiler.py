@@ -170,23 +170,79 @@ def select_instructions(p: cvar.Program) -> x86.Program:
 ##################################################
 # Pass #6: assign-homes
 ##################################################
+
+def align(num_bytes: int) -> int:
+    if num_bytes % 16 == 0:
+        return num_bytes
+    else:
+        return num_bytes + (16 - (num_bytes % 16))
+
+def new_stack_location(homes, var):
+    len_stack = len(homes) + 1
+    new_stack_offset = len_stack * 8
+    new_stack_val = x86.Deref(- new_stack_offset, 'rbp')  # produce: -n(%rbp)
+    homes[var] = new_stack_val
+    return new_stack_val
+
 # output of this pass is:
 # a tuple where the parts are
 # 1. the x86 program
 # 2. the number of bytes needed to store variables on the stack
 # If I need to store n variables on the stack then this number should be align(8*n)
 def assign_homes(program: x86.Program) -> Tuple[x86.Program, int]:
-    # YOUR CODE HERE
-    pass
+    homes : Dict[str, int] = {}
 
+    def make_stack_location(instructions: List[x86.Instr]) -> List[x86.Instr]:
+        new_instructions = []
+        for i in instructions:
+            if isinstance(i, x86.Addq) or isinstance(i, x86.Movq):
+                e1 = i.e1
+                e2 = i.e2
+                if isinstance(e1, x86.Var):
+                    if e1.var in homes:
+                        e1 = homes[e1.var]
+                    else:
+                        e1 = new_stack_location(homes, e1.var)
+                if isinstance(e2, x86.Var):
+                    if e2.var in homes:
+                        e2 = homes[e2.var]
+                    else:
+                        e2 = new_stack_location(homes, e2.var)
+                if isinstance(i, x86.Addq):
+                    new_instructions.append(x86.Addq(e1, e2))
+                elif isinstance(i, x86.Movq):
+                    new_instructions.append(x86.Movq(e1, e2))
+            else:
+                new_instructions.append(i)
+        return new_instructions
+
+    blocks = program.blocks
+    new_blocks = {label: make_stack_location(blocks[label]) for label in blocks}
+    new_program = x86.Program(new_blocks)
+    num_bytes_needed = (len(homes) + 1) * 8
+    return (new_program, num_bytes_needed)
 
 ##################################################
 # Pass #7: patch-instructions
 ##################################################
 
 def patch_instructions(inputs: Tuple[x86.Program, int]) -> Tuple[x86.Program, int]:
-    # YOUR CODE HERE
-    pass
+    def fix_double_derefs(instructions: List[x86.Instr]) -> List[x86.Instr]:
+        new_instructions = []
+        for i in instructions:
+            if isinstance(i, x86.Addq) and (isinstance(i.e1, x86.Deref) and isinstance(i.e2, x86.Deref)):
+                new_instructions.append(x86.Movq(i.e1, x86.Reg('rax')))
+                new_instructions.append(x86.Addq(x86.Reg('rax'), i.e2))
+            elif isinstance(i, x86.Movq) and (isinstance(i.e1, x86.Deref) and isinstance(i.e2, x86.Deref)):
+                new_instructions.append(x86.Movq(i.e1, x86.Reg('rax')))
+                new_instructions.append(x86.Movq(x86.Reg('rax'), i.e2))
+            else:
+                new_instructions.append(i)
+        return new_instructions
+    blocks = inputs[0].blocks
+    new_blocks = {label: fix_double_derefs(blocks[label]) for label in blocks}
+    new_program = x86.Program(new_blocks)
+    return (new_program, inputs[1])
 
 
 ##################################################
