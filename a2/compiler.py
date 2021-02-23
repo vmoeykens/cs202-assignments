@@ -63,8 +63,10 @@ def rco(e: RVarExp) -> RVarExp:
             body_p = rco_exp(e.body)
             return Let(e.x, e1_p, body_p)
         elif isinstance(e, Prim):
-            # needs atomic arguments
-            pass
+            bindings = {}
+            new_args = [rco_atm(a, bindings) for a in e.args]
+            p = Prim(e.op, new_args)
+            return mk_let(bindings, p)
         else:
             raise Exception('unknown expression', e)
 
@@ -74,14 +76,18 @@ def rco(e: RVarExp) -> RVarExp:
         elif isinstance(e, Var):
             return e
         elif isinstance(e, Let):
-            # tricky case
-            pass
+            bindings[e.x] = rco_exp(e.e1)
+            new_var = rco_atm(e.body, bindings)
+            return new_var
         elif isinstance(e, Prim):
-            # tricky case
-            pass
+            new_args = [rco_atm(a, bindings) for a in e.args]
+            tmp = gensym('tmp')
+            bindings[tmp] = Prim(e.op, new_args)
+            return Var(tmp)
         else:
             raise Exception('unknown expression', e)
 
+    return rco_exp(e)
 
 ##################################################
 # Pass #3: explicate-control
@@ -89,13 +95,18 @@ def rco(e: RVarExp) -> RVarExp:
 
 def explicate_control(e: RVarExp) -> cvar.Program:
     def ec_tail(e: RVarExp):
-        pass
+        # in the let case
+        if isinstance(e, Let):
+            ec_assign(e.x, e.e1, ec_tail(e.body))
 
     def ec_assign(x: str, e: RVarExp, k: cvar.Tail) -> cvar.Tail:
         if isinstance(e, Int):
             assignment = cvar.Assign(x, cvar.AtmExp(cvar.Int(e.val)))
             return cvar.Seq(assignment, k)
-
+        if isinstance(e, Let):
+            # this is the tricky case we're discussing
+            # occurs when you have a let in a non-tail position in the e1 of another Let
+            pass
         # For atomic expressions the cases will be the same
         # for 'let' things are more complicated
         # for 'plus' things are only slightly more complicated
@@ -105,13 +116,29 @@ def explicate_control(e: RVarExp) -> cvar.Program:
 ##################################################
 
 def select_instructions(p: cvar.Program) -> x86.Program:
-    # YOUR CODE HERE
-    pass
+    def si_arg(a: cvar.Atm) -> x86.Arg:
+        pass
+
+    def si_tail(t: cvar.Tail) -> List[x86.Instr]:
+        if isinstance(t, cvar.Return) and isinstance(t.exp, cvar.AtmExp):
+            return [x86.Movq(si_arg(t.exp.atm), x86.Reg('rax')), x86.Jmp('conclusion')]
+
+    
+    blocks = p.blocks
+
+    new_blocks = {label: si_tail(block) for label, block in blocks}
+    program = x86.Program(new_blocks)
+
+    return program
 
 ##################################################
 # Pass #6: assign-homes
 ##################################################
-
+# output of this pass is:
+# a tuple where the parts are
+# 1. the x86 program
+# 2. the number of bytes needed to store variables on the stack
+# If I need to store n variables on the stack then this number should be align(8*n)
 def assign_homes(program: x86.Program) -> Tuple[x86.Program, int]:
     # YOUR CODE HERE
     pass
