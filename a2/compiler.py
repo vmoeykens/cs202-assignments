@@ -101,9 +101,10 @@ def gen_cvar_atm(e: RVarExp) -> cvar.Atm:
 
 def explicate_control(e: RVarExp) -> cvar.Program:
     def ec_tail(e: RVarExp) -> cvar.Tail:
-        # in the let case
         if isinstance(e, Int):
             return cvar.Return(cvar.AtmExp(cvar.Int(e.val)))
+        elif isinstance(e, Var):
+            return cvar.Return(cvar.AtmExp(cvar.Var(e.var)))
         elif isinstance(e, Let):
             return ec_assign(e.x, e.e1, ec_tail(e.body))
         elif isinstance(e, Prim):
@@ -134,20 +135,37 @@ def explicate_control(e: RVarExp) -> cvar.Program:
 ##################################################
 
 def select_instructions(p: cvar.Program) -> x86.Program:
-    def si_arg(a: cvar.Atm) -> x86.Arg:
-        pass
+    def si_atm(a: cvar.Atm) -> x86.Arg:
+        if isinstance(a, cvar.Int):
+            return x86.Int(a.val)
+        elif isinstance(a, cvar.Var):
+            return x86.Var(a.var)
+
+    def si_stmt(s: cvar.Stmt) -> List[x86.Instr]:
+        if isinstance(s, cvar.Assign):
+            if isinstance(s.exp, cvar.Prim):
+                return [x86.Movq(si_atm(s.exp.args[0]), x86.Var(s.var)),
+                        x86.Addq(si_atm(s.exp.args[1]),
+                                 x86.Var(s.var))]
+            elif isinstance(s.exp, cvar.AtmExp):
+                return [x86.Movq(si_atm(s.exp.atm), x86.Var(s.var))]
 
     def si_tail(t: cvar.Tail) -> List[x86.Instr]:
         if isinstance(t, cvar.Return) and isinstance(t.exp, cvar.AtmExp):
-            return [x86.Movq(si_arg(t.exp.atm), x86.Reg('rax')), x86.Jmp('conclusion')]
-
+            return [x86.Movq(si_atm(t.exp.atm), x86.Reg('rax')), x86.Jmp('conclusion')]
+        elif isinstance(t, cvar.Return) and isinstance(t.exp, cvar.Prim):
+            ret_var = x86.Var(gensym('retvar'))
+            return [x86.Movq(si_atm(t.exp.args[0]), ret_var),
+                    x86.Addq(si_atm(t.exp.args[1]), ret_var),
+                    x86.Movq(ret_var, x86.Reg('rax')), x86.Jmp('conclusion')]
+        elif isinstance(t, cvar.Seq):
+            return [*si_stmt(t.stmt), *si_tail(t.tail)]
 
     blocks = p.blocks
+    new_blocks = {label: si_tail(blocks[label]) for label in blocks}
+    new_program = x86.Program(new_blocks)
 
-    new_blocks = {label: si_tail(block) for label, block in blocks}
-    program = x86.Program(new_blocks)
-
-    return program
+    return new_program
 
 ##################################################
 # Pass #6: assign-homes
