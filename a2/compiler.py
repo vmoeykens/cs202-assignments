@@ -184,11 +184,6 @@ def new_stack_location(homes, var):
     homes[var] = new_stack_val
     return new_stack_val
 
-# output of this pass is:
-# a tuple where the parts are
-# 1. the x86 program
-# 2. the number of bytes needed to store variables on the stack
-# If I need to store n variables on the stack then this number should be align(8*n)
 def assign_homes(program: x86.Program) -> Tuple[x86.Program, int]:
     homes : Dict[str, int] = {}
 
@@ -249,9 +244,95 @@ def patch_instructions(inputs: Tuple[x86.Program, int]) -> Tuple[x86.Program, in
 # Pass #8: print-x86
 ##################################################
 
+# Boilerplate main section
+def make_main(stack_req):
+    return x86.Program({
+        'main': [
+            x86.Pushq(x86.Reg('rbp')),
+            x86.Movq(x86.Reg('rsp'), x86.Reg('rbp')),
+            x86.Subq(x86.Int(stack_req), x86.Reg('rsp')),
+            x86.Jmp('start'),
+        ]})
+
+# Boilerplate conclusion section
+def make_conclusion(stack_req):
+    return x86.Program({
+        'conclusion': [
+            x86.Movq(x86.Reg('rax'), x86.Reg('rdi')),
+            x86.Callq('print_int'),
+            x86.Movq(x86.Int(0), x86.Reg('rax')),
+            x86.Addq(x86.Int(stack_req), x86.Reg('rsp')),
+            x86.Popq(x86.Reg('rbp')),
+            x86.Retq(),
+        ]
+})
+
+def arg_to_x86_string(arg: x86.Arg) -> str:
+    """Convert x86exp Arg to x86 string
+        Args:
+            arg (x86.Arg): x86exp Arg
+        Returns:
+            String of x86 assembly
+    """
+    if isinstance(arg, x86.Int):
+        return f'${arg.val}'
+    elif isinstance(arg, x86.Reg):
+        return f'%{arg.val}'
+    elif isinstance(arg, x86.Deref):
+        return f'{arg.offset}(%{arg.val})'
+
+
+def instruction_to_x86_string(inst: x86.Instr) -> str:
+    """Convert x86ex Instr to x86 string
+        Args:
+            inst (x86.Instr): x86exp Instr
+        Returns:
+              String of x86 assembly
+    """
+    if isinstance(inst, x86.Addq):
+        return f'addq {arg_to_x86_string(inst.e1)}, ' \
+               f'{arg_to_x86_string(inst.e2)}'
+    elif isinstance(inst, x86.Subq):
+        return f'subq {arg_to_x86_string(inst.e1)}, ' \
+               f'{arg_to_x86_string(inst.e2)}'
+    elif isinstance(inst, x86.Movq):
+        return f'movq {arg_to_x86_string(inst.e1)}, ' \
+               f'{arg_to_x86_string(inst.e2)}'
+    elif isinstance(inst, x86.Jmp):
+        return f'jmp {inst.label}'
+    elif isinstance(inst, x86.Callq):
+        return f'callq {inst.label}'
+    elif isinstance(inst, x86.Pushq):
+        return f'pushq {arg_to_x86_string(inst.e1)}'
+    elif isinstance(inst, x86.Popq):
+        return f'popq {arg_to_x86_string(inst.e1)}'
+    elif isinstance(inst, x86.Retq):
+        return f'retq'
+
+
+def ast_to_x86_string(program: x86.Program) -> str:
+    """Iterates through x86exp Program and generates
+        x86 assembly string
+        Args:
+            program (x86.Program): Program to iterate through
+        Returns:
+            String of x86 assembly block
+    """
+    output_string = ''
+    label = list(program.blocks.keys())[0]
+    output_string += f'{label}:\n'
+    for instruction in program.blocks[label]:
+        output_string += f'   {instruction_to_x86_string(instruction)}\n'
+    return output_string
+
 def print_x86(inputs: Tuple[x86.Program, int]) -> str:
-    # YOUR CODE HERE
-    pass
+    """Generates x86 assembly for this specific assignment"""
+    output_string = '   .globl main\n'
+    output_string += ast_to_x86_string(make_main(inputs[1]))
+    output_string += ast_to_x86_string(inputs[0])
+    output_string += ast_to_x86_string(make_conclusion(inputs[1]))
+
+    return output_string
 
 ##################################################
 # Compiler definition
