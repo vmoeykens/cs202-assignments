@@ -93,23 +93,41 @@ def rco(e: RVarExp) -> RVarExp:
 # Pass #3: explicate-control
 ##################################################
 
+def gen_cvar_atm(e: RVarExp) -> cvar.Atm:
+    if isinstance(e, Int):
+        return cvar.Int(e.val)
+    if isinstance(e, Var):
+        return cvar.Var(e.var)
+
 def explicate_control(e: RVarExp) -> cvar.Program:
-    def ec_tail(e: RVarExp):
+    def ec_tail(e: RVarExp) -> cvar.Tail:
         # in the let case
-        if isinstance(e, Let):
-            ec_assign(e.x, e.e1, ec_tail(e.body))
+        if isinstance(e, Int):
+            return cvar.Return(cvar.AtmExp(cvar.Int(e.val)))
+        elif isinstance(e, Let):
+            return ec_assign(e.x, e.e1, ec_tail(e.body))
+        elif isinstance(e, Prim):
+            tail_args = [gen_cvar_atm(a) for a in e.args]
+            return cvar.Return(cvar.Prim(e.op, tail_args))
 
     def ec_assign(x: str, e: RVarExp, k: cvar.Tail) -> cvar.Tail:
         if isinstance(e, Int):
             assignment = cvar.Assign(x, cvar.AtmExp(cvar.Int(e.val)))
             return cvar.Seq(assignment, k)
-        if isinstance(e, Let):
-            # this is the tricky case we're discussing
-            # occurs when you have a let in a non-tail position in the e1 of another Let
-            pass
-        # For atomic expressions the cases will be the same
-        # for 'let' things are more complicated
-        # for 'plus' things are only slightly more complicated
+        elif isinstance(e, Var):
+            assignment = cvar.Assign(x, cvar.AtmExp(cvar.Var(e.var)))
+            return cvar.Seq(assignment, k)
+        elif isinstance(e, Let):
+            assignment = cvar.Assign(e.x, cvar.AtmExp(gen_cvar_atm(e.e1)))
+            sequence = cvar.Seq(cvar.Assign(x, cvar.AtmExp(cvar.Var(e.x))),
+                                cvar.Return(cvar.AtmExp(cvar.Var(x))))
+            return cvar.Seq(assignment, sequence)
+        elif isinstance(e, Prim):
+            tail_args = [gen_cvar_atm(a) for a in e.args]
+            assignment = cvar.Assign(x, cvar.Prim(e.op, tail_args))
+            return cvar.Seq(assignment, k)
+
+    return cvar.Program({'start': ec_tail(e)})
 
 ##################################################
 # Pass #4: select-instructions
@@ -123,7 +141,7 @@ def select_instructions(p: cvar.Program) -> x86.Program:
         if isinstance(t, cvar.Return) and isinstance(t.exp, cvar.AtmExp):
             return [x86.Movq(si_arg(t.exp.atm), x86.Reg('rax')), x86.Jmp('conclusion')]
 
-    
+
     blocks = p.blocks
 
     new_blocks = {label: si_tail(block) for label, block in blocks}
@@ -151,7 +169,7 @@ def assign_homes(program: x86.Program) -> Tuple[x86.Program, int]:
 def patch_instructions(inputs: Tuple[x86.Program, int]) -> Tuple[x86.Program, int]:
     # YOUR CODE HERE
     pass
-    
+
 
 ##################################################
 # Pass #8: print-x86
@@ -174,7 +192,7 @@ compiler_passes = {
     'patch instructions': patch_instructions,
     'print x86': print_x86
 }
-    
+
 
 
 def run_compiler(s, logging=False):
