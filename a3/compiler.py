@@ -32,7 +32,24 @@ def uniquify(e: RVarExp) -> RVarExp:
     :param e: The RVar program to uniquify
     :return: An RVar program with unique names
     """
-    pass
+    def uniquify_exp(e: RVarExp, env: Dict[str, str]) -> RVarExp:
+        if isinstance(e, Int):
+            return e
+        elif isinstance(e, Var):
+            return Var(env[e.var])
+        elif isinstance(e, Let):
+            new_e1 = uniquify_exp(e.e1, env)
+            new_x = gensym(e.x)
+            new_env = {**env, e.x: new_x}
+            new_body = uniquify_exp(e.body, new_env)
+            return Let(new_x, new_e1, new_body)
+        elif isinstance(e, Prim):
+            new_args = [uniquify_exp(arg, env) for arg in e.args]
+            return Prim(e.op, new_args)
+        else:
+            raise Exception('uniquify', e)
+
+    return uniquify_exp(e, {})
 
 
 ##################################################
@@ -60,8 +77,43 @@ def rco(e: RVarExp) -> RVarExp:
     :param e: An RVar expression
     :return: An RVar expression in A-Normal Form
     """
+    def rco_atm(e: RVarExp, bindings: Dict[str, RVarExp]) -> RVarExp:
+        if isinstance(e, Int):
+            return e
+        elif isinstance(e, Var):
+            return e
+        elif isinstance(e, Let):
+            new_e1 = rco_exp(e.e1)
+            bindings[e.x] = new_e1
+            v = rco_atm(e.body, bindings)
+            return v
+        elif isinstance(e, Prim):
+            new_args = [rco_atm(arg, bindings) for arg in e.args]
 
-    pass
+            new_v = gensym('tmp')
+            bindings[new_v] = Prim(e.op, new_args)
+            return Var(new_v)
+        else:
+            raise Exception('rco_atm', e)
+
+    def rco_exp(e: RVarExp) -> RVarExp:
+        if isinstance(e, Int):
+            return e
+        elif isinstance(e, Var):
+            return e
+        elif isinstance(e, Let):
+            new_e1 = rco_exp(e.e1)
+            new_body = rco_exp(e.body)
+            return Let(e.x, new_e1, new_body)
+        elif isinstance(e, Prim):
+            bindings = {}
+            new_args = [rco_atm(arg, bindings) for arg in e.args]
+
+            return mk_let(bindings, Prim(e.op, new_args))
+        else:
+            raise Exception('rco_exp', e)
+
+    return rco_exp(e)
 
 
 ##################################################
@@ -74,8 +126,35 @@ def explicate_control(e: RVarExp) -> cvar.Program:
     :param e: An RVar Expression
     :return: A CVar Program
     """
+    def ec_atm(e: RVarExp) -> cvar.Atm:
+        if isinstance(e, Int):
+            return cvar.Int(e.val)
+        elif isinstance(e, Var):
+            return cvar.Var(e.var)
 
-    pass
+    def ec_exp(e: RVarExp) -> cvar.Exp:
+        if isinstance(e, Prim):
+            return cvar.Prim(e.op, [ec_atm(a) for a in e.args])
+        else:
+            return cvar.AtmExp(ec_atm(e))
+
+    def ec_assign(x: str, e: RVarExp, k: cvar.Tail) -> cvar.Tail:
+        if isinstance(e, (Int, Var, Prim)):
+            return cvar.Seq(cvar.Assign(x, ec_exp(e)), k)
+        elif isinstance(e, Let):
+            return ec_assign(e.x, e.e1, ec_assign(x, e.body, k))
+        else:
+            raise Exception('ec_assign', e)
+
+    def ec_tail(e: RVarExp) -> cvar.Tail:
+        if isinstance(e, (Int, Var, Prim)):
+            return cvar.Return(ec_exp(e))
+        elif isinstance(e, Let):
+            return ec_assign(e.x, e.e1, ec_tail(e.body))
+        else:
+            raise Exception('ec_tail', e)
+
+    return cvar.Program({'start': ec_tail(e)})
 
 
 ##################################################
@@ -88,8 +167,41 @@ def select_instructions(p: cvar.Program) -> x86.Program:
     :param p: a CVar program
     :return: a pseudo-x86 program
     """
+    def si_atm(a: cvar.Atm) -> x86.Arg:
+        if isinstance(a, cvar.Int):
+            return x86.Int(a.val)
+        elif isinstance(a, cvar.Var):
+            return x86.Var(a.var)
+        else:
+            raise Exception('si_atm', a)
 
-    pass
+    def si_stmt(e: cvar.Stmt) -> List[x86.Instr]:
+        if isinstance(e, cvar.Assign):
+            if isinstance(e.exp, cvar.AtmExp):
+                return [ x86.Movq(si_atm(e.exp.atm), x86.Var(e.var)) ]
+            elif isinstance(e.exp, cvar.Prim):
+                if e.exp.op == '+':
+                    a1, a2 = e.exp.args
+                    return [ x86.Movq(si_atm(a1), x86.Var(e.var)),
+                             x86.Addq(si_atm(a2), x86.Var(e.var)) ]
+            raise Exception('si_stmt Assign', e)
+        else:
+            raise Exception('si_stmt', e)
+
+    def si_tail(e: cvar.Tail) -> List[x86.Instr]:
+        if isinstance(e, cvar.Return):
+            new_var = gensym('retvar')
+            instrs = si_stmt(cvar.Assign(new_var, e.exp))
+
+            return instrs + \
+                [ x86.Movq(x86.Var(new_var), x86.Reg('rax')),
+                  x86.Jmp('conclusion') ]
+        elif isinstance(e, cvar.Seq):
+            return si_stmt(e.stmt) + si_tail(e.tail)
+        else:
+            raise Exception('si_tail', e)
+
+    return x86.Program({label: si_tail(block) for (label,block) in p.blocks.items()})
 
 
 ##################################################
@@ -104,6 +216,15 @@ def uncover_live(program: x86.Program) -> Tuple[x86.Program, Dict[str, List[Set[
     live-after sets. This dict maps each label in the program to a list of live-after sets for that label.
     The live-after sets are in the same order as the label's instructions.
     """
+
+    def ul_block(instrs: List[x86.Instr]) -> List[Set[x86.Var]]:
+        # Computes a list of live-after sets for the instructions in one block of the oram
+
+        # process instructions in reverse order
+        for instruction in reversed(instrs):
+            # you will need the "previous life-after set"
+            pass
+        pass
 
     pass
 
@@ -226,8 +347,31 @@ def patch_instructions(inputs: Tuple[x86.Program, int]) -> Tuple[x86.Program, in
     :param inputs: A Tuple. The first element is an x86 program. The second element is the stack space in bytes.
     :return: A Tuple. The first element is the patched x86 program. The second element is the stack space in bytes.
     """
+    def pi_instr(e: x86.Instr) -> List[x86.Instr]:
+        if isinstance(e, x86.Movq) and \
+           isinstance(e.e1, x86.Deref) and \
+           isinstance(e.e2, x86.Deref):
+            return [x86.Movq(e.e1, x86.Reg('rax')),
+                    x86.Movq(x86.Reg('rax'), e.e2)]
+        elif isinstance(e, x86.Addq) and \
+           isinstance(e.e1, x86.Deref) and \
+           isinstance(e.e2, x86.Deref):
+            return [x86.Movq(e.e1, x86.Reg('rax')),
+                    x86.Addq(x86.Reg('rax'), e.e2)]
+        elif isinstance(e, (x86.Callq, x86.Retq, x86.Jmp, x86.Movq, x86.Addq)):
+            return [e]
+        else:
+            raise Exception('pi_instr', e)
 
-    pass
+    def pi_block(instrs: List[x86.Instr]) -> List[x86.Instr]:
+        new_instrs = [pi_instr(i) for i in instrs]
+        flattened = [val for sublist in new_instrs for val in sublist]
+        return flattened
+
+    program, stack_size = inputs
+    blocks = program.blocks
+    new_blocks = {label: pi_block(block) for label, block in blocks.items()}
+    return (x86.Program(new_blocks), stack_size)
 
 
 ##################################################
@@ -241,8 +385,59 @@ def print_x86(inputs: Tuple[x86.Program, int]) -> str:
     :return: A string, ready for gcc.
     """
 
-    pass
+    def print_arg(a: x86.Arg) -> str:
+        if isinstance(a, x86.Int):
+            return f'${a.val}'
+        elif isinstance(a, x86.Reg):
+            return f'%{a.val}'
+        elif isinstance(a, x86.Var):
+            return f'#{a.var}'
+        elif isinstance(a, x86.Deref):
+            return f'{a.offset}(%{a.val})'
+        else:
+            raise Exception('print_arg', a)
 
+    def print_instr(e: x86.Instr) -> str:
+        if isinstance(e, x86.Movq):
+            return f'movq {print_arg(e.e1)}, {print_arg(e.e2)}'
+        elif isinstance(e, x86.Addq):
+            return f'addq {print_arg(e.e1)}, {print_arg(e.e2)}'
+        elif isinstance(e, x86.Callq):
+            return f'callq {e.label}'
+        elif isinstance(e, x86.Retq):
+            return f'retq'
+        elif isinstance(e, x86.Jmp):
+            return f'jmp {e.label}'
+        else:
+            raise Exception('print_instr', e)
+
+    def print_block(label: str, instrs: List[x86.Instr]) -> str:
+        name = f'{label}:\n'
+        instr_strs = '\n'.join(['  ' + print_instr(i) for i in instrs])
+        return name + instr_strs
+
+    program, stack_size = inputs
+    blocks = program.blocks
+    block_instrs = '\n'.join([print_block(label, block) for label, block in blocks.items()])
+
+    program = f"""
+      .globl main
+    main:
+      pushq %rbp
+      movq %rsp, %rbp
+      subq ${stack_size}, %rsp
+      jmp start
+    {block_instrs}
+    conclusion:
+      movq %rax, %rdi
+      callq print_int
+      movq $0, %rax
+      addq ${stack_size}, %rsp
+      popq %rbp
+      retq
+    """
+
+    return program
 
 ##################################################
 # Compiler definition
