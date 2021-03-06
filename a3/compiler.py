@@ -232,8 +232,7 @@ def uncover_live(program: x86.Program) -> Tuple[x86.Program, Dict[str, List[Set[
     def ul_block(instrs: List[x86.Instr]) -> List[Set[x86.Var]]:
         # Computes a list of live-after sets for the instructions in one block of the program
         live_after_sets = [{} for _ in range(len(instrs))]
-        prev_instr = None
-        prev_las : Set = set()
+        prev_las = set()
         prev_written, prev_read = set(), set()
         for i, instruction in enumerate(reversed(instrs)):
             prev_las = set(prev_las.difference(prev_written))
@@ -243,7 +242,6 @@ def uncover_live(program: x86.Program) -> Tuple[x86.Program, Dict[str, List[Set[
                 new_las = prev_las
             live_after_sets[i] = new_las
             prev_las = new_las
-            prev_instr = instruction
             prev_written, prev_read = get_vars_written_read(instruction)
         live_after_sets.reverse()
         return live_after_sets
