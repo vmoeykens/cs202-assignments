@@ -216,18 +216,41 @@ def uncover_live(program: x86.Program) -> Tuple[x86.Program, Dict[str, List[Set[
     live-after sets. This dict maps each label in the program to a list of live-after sets for that label.
     The live-after sets are in the same order as the label's instructions.
     """
+    def get_vars_written_read(instr : x86.Instr) -> Tuple[Set[x86.Var], Set[x86.Var]]:
+        written = set()
+        read = set()
+        if isinstance(instr, x86.Addq) or isinstance(instr, x86.Subq) or isinstance(instr, x86.Movq):
+            if isinstance(instr.e1, x86.Var):
+                read.add(instr.e1)
+            if isinstance(instr.e2, x86.Var):
+                written.add(instr.e2)
+        elif isinstance(instr, x86.Negq) or isinstance(instr, x86.Pushq) or isinstance(instr, x86.Popq):
+            if isinstance(instr.e1, x86.Var):
+                read.add(instr.e1)
+        return written, read
 
     def ul_block(instrs: List[x86.Instr]) -> List[Set[x86.Var]]:
-        # Computes a list of live-after sets for the instructions in one block of the oram
+        # Computes a list of live-after sets for the instructions in one block of the program
+        live_after_sets = [{} for _ in range(len(instrs))]
+        prev_instr = None
+        prev_las : Set = set()
+        prev_written, prev_read = set(), set()
+        for i, instruction in enumerate(reversed(instrs)):
+            prev_las = set(prev_las.difference(prev_written))
+            if prev_read:
+                new_las = set(prev_las.union(prev_read))
+            else:
+                new_las = prev_las
+            live_after_sets[i] = new_las
+            prev_las = new_las
+            prev_instr = instruction
+            prev_written, prev_read = get_vars_written_read(instruction)
+        live_after_sets.reverse()
+        return live_after_sets
 
-        # process instructions in reverse order
-        for instruction in reversed(instrs):
-            # you will need the "previous life-after set"
-            pass
-        pass
-
-    pass
-
+    for block in program.blocks.keys():
+        ul_block(program.blocks[block])
+    return program, {label: ul_block(block) for (label,block) in program.blocks.items()}
 
 ##################################################
 # build-interference
@@ -268,7 +291,6 @@ class InterferenceGraph:
         return 'InterferenceGraph{\n ' + ',\n '.join(strings) + '\n}'
 
 
-
 def build_interference(inputs: Tuple[x86.Program, Dict[str, List[Set[x86.Var]]]]) -> \
         Tuple[x86.Program, InterferenceGraph]:
     """
@@ -278,7 +300,10 @@ def build_interference(inputs: Tuple[x86.Program, Dict[str, List[Set[x86.Var]]]]
     :return: A Tuple. The first element is the same as the input program. The second is a completed interference graph.
     """
 
-    pass
+    program, live_afters = inputs
+    g = InterferenceGraph()
+    # process the program here
+
 
 
 ##################################################
@@ -310,6 +335,25 @@ def allocate_registers(inputs: Tuple[x86.Program, InterferenceGraph]) -> \
 
     ## Functions for graph coloring
     def color_graph(local_vars: Set[x86.Var], interference_graph: InterferenceGraph) -> Coloring:
+        """
+        Colors the interference graph
+        :param local_vars: set of variables in the program
+        :param interference_graph: the interference graph computed by build-interference
+        :return:
+        """
+        # Do this until the list of variables left to color is empty:
+        # 1. Pick the variable `x` with the largest saturation set
+        # 2. Assign the lowest available color to `x`. A color is available if it is not in `x`'s saturation set.
+        # 3. Update the saturation sets of the nightbors of `x` *that have not yet been colored* by adding `x`'s color to those sets.
+
+        saturations: Dict[x86.Var, Set[Color]] = {}
+
+        vars_to_color = list(local_vars)
+        while vars_to_color:
+            # do 3 steps
+            pass
+        #x = pick_var(...)
+        interference_graph.neighbors(x)
         pass
 
     # Functions for allocating registers
