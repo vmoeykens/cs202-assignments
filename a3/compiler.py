@@ -219,9 +219,15 @@ def uncover_live(program: x86.Program) -> Tuple[x86.Program, Dict[str, List[Set[
     def get_vars_written_read(instr : x86.Instr) -> Tuple[Set[x86.Var], Set[x86.Var]]:
         written = set()
         read = set()
-        if isinstance(instr, x86.Addq) or isinstance(instr, x86.Subq) or isinstance(instr, x86.Movq):
+        if isinstance(instr, x86.Movq):
             if isinstance(instr.e1, x86.Var):
                 read.add(instr.e1)
+            if isinstance(instr.e2, x86.Var):
+                written.add(instr.e2)
+        elif isinstance(instr, x86.Addq) or isinstance(instr, x86.Subq):
+            if isinstance(instr.e1, x86.Var):
+                read.add(instr.e1)
+                read.add(instr.e2)
             if isinstance(instr.e2, x86.Var):
                 written.add(instr.e2)
         elif isinstance(instr, x86.Negq) or isinstance(instr, x86.Pushq) or isinstance(instr, x86.Popq):
@@ -231,13 +237,13 @@ def uncover_live(program: x86.Program) -> Tuple[x86.Program, Dict[str, List[Set[
 
     def ul_block(instrs: List[x86.Instr]) -> List[Set[x86.Var]]:
         # Computes a list of live-after sets for the instructions in one block of the program
-        live_after_sets = [{} for _ in range(len(instrs))]
+        live_after_sets = [set() for _ in range(len(instrs))]
         prev_las = set()
         prev_written, prev_read = set(), set()
         for i, instruction in enumerate(reversed(instrs)):
             prev_las = set(prev_las.difference(prev_written))
             if prev_read:
-                new_las = set(prev_las.union(prev_read))
+                new_las = prev_las.union(prev_read)
             else:
                 new_las = prev_las
             live_after_sets[i] = new_las
@@ -300,8 +306,17 @@ def build_interference(inputs: Tuple[x86.Program, Dict[str, List[Set[x86.Var]]]]
 
     program, live_afters = inputs
     g = InterferenceGraph()
-    # process the program here
+    for label, live_after_sets in live_afters.items():
+        for program_vars in live_after_sets:
+            for program_var in program_vars:
+                if program_var not in g.graph.keys():
+                    g.graph[program_var] = set()
+                for other_var in program_vars:
+                    if other_var != program_var and other_var not in g.neighbors(program_var):
+                        g.add_edge(program_var, other_var)
 
+    # process the program here
+    return program, g
 
 
 ##################################################
