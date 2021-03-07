@@ -341,10 +341,29 @@ def allocate_registers(inputs: Tuple[x86.Program, InterferenceGraph]) -> \
 
     ## Functions for listing the variables in the program
     def vars_arg(a: x86.Arg) -> Set[x86.Var]:
-        pass
+        if isinstance(a, x86.Var):
+            return {a}
+        else:
+            return set()
 
     def vars_instr(e: x86.Instr) -> Set[x86.Var]:
-        pass
+        if isinstance(e, (x86.Movq, x86.Addq, x86.Subq)):
+            return vars_arg(e.e1).union(vars_arg(e.e2))
+        elif isinstance(e, (x86.Popq, x86.Pushq, x86.Negq)):
+            return vars_arg(e.e1)
+        else:
+            return set()
+
+    def vars_block(instrs: List[x86.Instr]) -> Set[x86.Var]:
+        return set().union(*[vars_instr(i) for i in instrs])
+
+    def pick_var(saturations: Dict[x86.Var, Set[Color]], vars_to_color) -> x86.Var:
+        largest_saturation_val = -1
+        largest_saturation_var: x86.Var = None
+        for key, color_set in saturations.items():
+            if len(color_set) > largest_saturation_val and key in vars_to_color:
+                largest_saturation_var = key
+        return largest_saturation_var
 
     ## Functions for graph coloring
     def color_graph(local_vars: Set[x86.Var], interference_graph: InterferenceGraph) -> Coloring:
@@ -354,20 +373,19 @@ def allocate_registers(inputs: Tuple[x86.Program, InterferenceGraph]) -> \
         :param interference_graph: the interference graph computed by build-interference
         :return:
         """
-        # Do this until the list of variables left to color is empty:
-        # 1. Pick the variable `x` with the largest saturation set
-        # 2. Assign the lowest available color to `x`. A color is available if it is not in `x`'s saturation set.
-        # 3. Update the saturation sets of the nightbors of `x` *that have not yet been colored* by adding `x`'s color to those sets.
-
-        saturations: Dict[x86.Var, Set[Color]] = {}
-
+        saturations: Dict[x86.Var, Set[Color]] = {var: set() for var in local_vars}
+        coloring: Coloring = {}
         vars_to_color = list(local_vars)
         while vars_to_color:
-            # do 3 steps
-            pass
-        #x = pick_var(...)
-        interference_graph.neighbors(x)
-        pass
+            color = 0
+            x = pick_var(saturations, vars_to_color)
+            while color in saturations[x]:
+                color += 1
+            coloring[x] = color
+            for neighbor in interference_graph.neighbors(x):
+                saturations[neighbor].add(color)
+            vars_to_color.remove(x)
+        return coloring
 
     # Functions for allocating registers
     def make_stack_loc(offset):
@@ -379,14 +397,49 @@ def allocate_registers(inputs: Tuple[x86.Program, InterferenceGraph]) -> \
     # Functions for replacing variables with their homes
     homes: Dict[str, x86.Arg] = {}
 
+    def map_colors_loc(coloring: Coloring, register_locations) -> Tuple[Dict[Color, x86.Arg], int]:
+        """Creates a mapping between colors and registers and/or stack locations and returns the mapping and
+            the size of the stack needed
+        """
+        max_color = -1
+        current_stack_size = 1
+        color_loc_mapping: Dict[Color, x86.Arg] = {}
+
+        for var, color in coloring.items():
+            if color > max_color:
+                max_color = color
+        for color in range(max_color + 1):
+            if register_locations:
+                color_loc_mapping[color] = register_locations[0]
+                register_locations.remove(register_locations[0])
+            else:
+                color_loc_mapping[color] = make_stack_loc(current_stack_size)
+                current_stack_size += 1
+        return color_loc_mapping, current_stack_size * 8
+
     def ah_arg(a: x86.Arg) -> x86.Arg:
-        pass
+        if isinstance(a, x86.Int):
+            return a
+        elif isinstance(a, x86.Reg):
+            return a
+        elif isinstance(a, x86.Var):
+            if a.var in homes:
+                return homes[a.var]
+        else:
+            raise Exception('ah_arg', a)
 
     def ah_instr(e: x86.Instr) -> x86.Instr:
-        pass
+        if isinstance(e, x86.Movq):
+            return x86.Movq(ah_arg(e.e1), ah_arg(e.e2))
+        elif isinstance(e, x86.Addq):
+            return x86.Addq(ah_arg(e.e1), ah_arg(e.e2))
+        elif isinstance(e, (x86.Callq, x86.Retq, x86.Jmp)):
+            return e
+        else:
+            raise Exception('ah_instr', e)
 
     def ah_block(instrs: List[x86.Instr]) -> List[x86.Instr]:
-        pass
+        return [ah_instr(i) for i in instrs]
 
     def align(num_bytes: int) -> int:
         if num_bytes % 16 == 0:
@@ -394,8 +447,21 @@ def allocate_registers(inputs: Tuple[x86.Program, InterferenceGraph]) -> \
         else:
             return num_bytes + (16 - (num_bytes % 16))
 
-    # Main body of the pass
-    pass
+    def map_homes(coloring: Coloring, color_loc_mapping):
+        homes: Dict[str, x86.Arg] = {}
+        for var, color in coloring.items():
+            homes[var.var] = color_loc_mapping[color]
+        return homes
+
+    program, interference_graph = inputs
+    blocks = program.blocks
+    local_vars: Set[x86.Var] = set().union(*[vars_block(block) for label,block in blocks.items()])
+    coloring: Coloring = color_graph(local_vars, interference_graph)
+    color_loc_mapping, num_bytes_needed = map_colors_loc(coloring, register_locations)
+    homes = map_homes(coloring, color_loc_mapping)
+    new_blocks = {label: ah_block(block) for label, block in blocks.items()}
+
+    return x86.Program(new_blocks), align(num_bytes_needed)
 
 
 ##################################################
